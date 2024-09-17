@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# Check if the correct number of arguments are provided
+if [ "$#" -ne 1 ]; then
+  echo
+  echo "Usage: $0 <database_name>"
+  echo
+  exit 1
+fi
+
+# Check if mongod service is running
+if ! pgrep mongod > /dev/null; then
+  echo
+  echo "MongoDB service is not running. Please start the mongod service."
+  echo
+  exit 1
+fi
+
+# Define variables
+DB_NAME="$1"
+COLLECTIONS=("acquisitions" "diagnostics" "fs.chunks" "fs.files" "instruments" "run_setup")
+
+# Function to create collections
+create_collections() {
+  local db_name=$1
+  shift
+  local collections=("$@")
+
+  for collection in "${collections[@]}"; do
+    echo "Creating collection: $collection in database: $db_name"
+    mongosh --eval "db.createCollection('$collection')" $db_name
+  done
+}
+
+# Function to add a document to a collection
+DOC_COLLECTION="run_setup"
+DOC_FIELDS='{ "last_shot": 0, "experiment": "test" }'
+add_document() {
+  local db_name=$1
+  local collection=$2
+  local fields=$3
+
+  echo "Adding document to collection: $collection in database: $db_name"
+  mongosh --eval "db.$collection.insertOne($fields)" $db_name
+}
+
+# Function to create the unique compound index for each collection that will contain information
+create_index() {
+  local db_name=$1
+  local collection="$2"
+  local field1='metadata.shot_number'
+  local field2='metadata.device_name'
+  local index_name="MoriaIndex__shotNumber_deviceName"
+  
+  echo "Adding index to collection: $collection in database: $db_name"
+  mongosh --eval "db.$collection.createIndex( { '$field1': 1, '$field2': 1 }, { unique: true, name : '$index_name' } )" $db_name
+}
+
+# Create the database and collections
+echo "Creating database: $DB_NAME and collections: ${COLLECTIONS[*]}"
+create_collections $DB_NAME "${COLLECTIONS[@]}"
+
+# Setup a unique compound index for the acquistion and fs.files collections
+echo "Create the compound indices"
+create_index $DB_NAME "acquisitions"
+create_index $DB_NAME "fs.files"
+
+# Add a document to one of the collections
+echo "Adding a document to collection: $DOC_COLLECTION"
+add_document $DB_NAME $DOC_COLLECTION "$DOC_FIELDS"

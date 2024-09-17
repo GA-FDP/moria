@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Check if the correct number of arguments are provided
+if [ "$#" -ne 2 ]; then
+  echo
+  echo "Usage: $0 <database_name> <backup_directory>"
+  echo
+  exit 1
+fi
+
+# Check if mongod service is running
+if ! pgrep mongod > /dev/null; then
+  echo
+  echo "MongoDB service is not running. Please start the mongod service."
+  echo
+  exit 1
+fi
+
+# Variables
+DB_NAME="$1"
+BACKUP_DIR="$2"
+LOG_FILE="/data/mongo_data_backup/log"
+TIMESTAMP=$(date +"%F_%T")
+
+# Run mongorestore and capture output and error
+  # --drop ensures that existing collections are removed before restoring
+RESTORE_OUTPUT=$(mongorestore --db "${DB_NAME}" --drop "${BACKUP_DIR}/${DB_NAME}" 2>&1)
+RESTORE_EXIT_STATUS=$?
+
+# Check if mongorestore was successful
+if [ ${RESTORE_EXIT_STATUS} -eq 0 ]; then
+  echo "$TIMESTAMP - Restore successful from: ${BACKUP_DIR}" >> $LOG_FILE
+else
+  echo "$TIMESTAMP - Restore failed" >> $LOG_FILE
+  exit 1
+fi
