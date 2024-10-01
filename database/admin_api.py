@@ -23,7 +23,7 @@ class AdminAPI:
 
     def remove_instrument(self, instrument: str):
         if not self.query.instrument_exists(instrument):
-            print("\nInstrument doesn't exists\n")
+            print("\nInstrument doesn't exist\n")
         elif not isinstance(instrument, str):
             print("\nInstrument variable must be a string\n")
         else:
@@ -41,7 +41,7 @@ class AdminAPI:
 
     def remove_diagnostic(self, diagnostic: str):
         if not self.query.diagnostic_exists(diagnostic):
-            print("\nDiagnostic doesn't exists\n")
+            print("\nDiagnostic doesn't exist\n")
         elif not isinstance(diagnostic, str):
             print("\nDiagnostic variable must be a string\n")
         else:
@@ -61,7 +61,7 @@ class AdminAPI:
 
 
     # Experiment collection
-    def set_experiment(self, name):
+    def set_experiment(self, name: str):
         update_operation = {"$set": {"experiment": name}}
         self.db.database["run_setup"].update_one({}, update_operation)
 
