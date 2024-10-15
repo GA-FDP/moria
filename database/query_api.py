@@ -200,7 +200,7 @@ class QueryAPI:
         return num_docs == 1
 
     def instrument_in_gridfs(self, instrument: str):
-        if not self.query.instrument_exists(instrument): 
+        if not self.instrument_exists(instrument): 
             print("\nInstrument doesn't exist\n")
             return
 
