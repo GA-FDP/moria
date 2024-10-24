@@ -30,10 +30,17 @@ class QueryAPI:
         self.debug = 0 
 
         # For query building
-        self.pipeline = []
-        self.data_collection = "acquisitions"
-        self.gridFS_collection = "fs.files"
-        self.upload_time = "metadata.trigger_timestamp" # time parameter to query on
+        self.filter_pipeline = []
+
+        # Collections containing data
+        self.collections = ['acquisitions', 'fs.files']
+        self.dict_names  = ['acq', 'gridfs']            # used in aggregation queries
+
+        # Useful global values
+        self.num_collections = len(self.collections)
+        self.data_collection = self.collections[0]
+        self.gridFS_collection = self.collections[1]     
+        
 
     ##################################################################################
     ###                         Query builder interface                            ###
@@ -42,31 +49,66 @@ class QueryAPI:
     # CLEAR THE BUILT QUERY
     # --------------------------------------------------------------------------------
     def clear_query(self):
-        self.pipeline.clear()
+        self.filter_pipeline.clear()
 
     # EXECUTE THE BUILT QUERY
     # --------------------------------------------------------------------------------
-    def run_query(self, make_dict = True):
-        dict_name = "results"
+    # Run one single aggregation query that filters each collection and returns the output
+    def run_query(self, fetch_related_data = False, make_dict = True):
+        key = 'metadata.shot_number'
         
-        # Query the two collections using the same pipeline
-        if self.pipeline:
-            if (self.debug > 0): print(self.pipeline)
-            if (self.debug > 0): query_start_time = time.time()
-            acq_cursor = self.db.database[self.data_collection].aggregate(self.pipeline)    # acquistions
-            fs_cursor  = self.db.database[self.gridFS_collection].aggregate(self.pipeline)  # fs.files
-            if (self.debug > 0): print(f"\nQuery execution time: {time.time() - query_start_time}")
+        if (fetch_related_data):
+            # Match and group by key
+            self.filter_pipeline.append({ '$group': { '_id': f'${key}' }})
+            
+            # Initialize the union pipeline using the filter pipeline
+            union_pipeline = self.filter_pipeline.copy()
 
-            if (self.debug > 0): query_start_time = time.time()
-            # NOTE: this step is merely to create a user friendly dictionary and is not strictly 
-            #       necessary, disable if faster speeds are required
-            if (make_dict): result_dict = self.create_dict([acq_cursor, fs_cursor])
-            else: result_dict = [acq_cursor, fs_cursor]
-            if (self.debug > 0): print(f"Time to create dictionary: {time.time() - query_start_time}\n")
+            # Include keys from the other collections that match the search criteria
+            for i in range(1, self.num_collections):
+                union_pipeline.extend([{ '$unionWith': { 'coll': self.collections[i],
+                                                         'pipeline': self.filter_pipeline
+                                                       }
+                                       },
 
-            return result_dict
+                                       # Ensure uniqueness after union
+                                       {
+                                         '$group': { '_id': '$_id' }
+                                       }])
+            
+            # Lookup the data from each collection corresponding to the list of keys
+            for name, collection in zip(self.dict_names, self.collections):
+                union_pipeline.extend([{ '$lookup': { 'from': collection,
+                                                      'localField': '_id',
+                                                      'foreignField': key,
+                                                      'as': name
+                                                    }
+                                       }])
+        else: # Only apply a filter to each collection 
+            union_pipeline = self.filter_pipeline.copy()
+            
+            for i in range(1, self.num_collections):
+                union_pipeline.extend([{ '$unionWith': { 'coll': self.collections[i],
+                                                         'pipeline': self.filter_pipeline 
+                                                       }
+                                       }])
+        # Debug        
+        if (self.debug > 0): 
+            print(f'\nFilter pipeline:\n{self.filter_pipeline}')
+            print(f'\nUnion pipeline:\n{union_pipeline}\n')
 
-    # BUILD THE QUERY PIPELINE
+        # Run the aggregation query 
+        res_cursor = self.db.database[self.data_collection].aggregate(union_pipeline)
+
+        # Return the results
+        # ------------------------------------
+        # NOTE: this step is merely to create a user friendly dictionary and is not strictly
+        #       necessary, disable if faster speeds are required
+        if (make_dict): return self.create_dict(res_cursor, fetch_related_data)
+        else: return res_cursor
+
+
+    # BUILD THE QUERY PIPELINE [ Filters the database ]
     # --------------------------------------------------------------------------------
     def query_data_range(self, query_dict: dict):
         match_input = {"$match" : {"$and" : []}}
@@ -111,10 +153,7 @@ class QueryAPI:
                 match_input["$match"]["$and"].append({f"{data_type}.{field}" : {"$gte" : lower_bound, "$lte" : upper_bound}})
 
         # Add to pipeline
-        if (len(match_input["$match"]["$and"]) != 0): self.pipeline.append(match_input)
-        
-        # Debug
-        if (self.debug): print(match_input)
+        if (len(match_input["$match"]["$and"]) != 0): self.filter_pipeline.append(match_input)
 
 
     def query_data_value(self, query_dict: dict):
@@ -140,46 +179,53 @@ class QueryAPI:
         #  - OR
         if (len(match_input["$match"]["$and"][0]["$or"]) == 0): match_input["$match"]["$and"].pop(0)
         #  - AND
-        if (len(match_input["$match"]["$and"]) != 0): self.pipeline.append(match_input)
+        if (len(match_input["$match"]["$and"]) != 0): self.filter_pipeline.append(match_input)
 
-        # Debug
-        if (self.debug > 0): print(match_input)
+
+    # CREATE USER FRIENDLY DICTIONARY 
+    # --------------------------------------------------------------------------------
+    def add_dict_value(self, res_doc: dict):
+        inst = res_doc["metadata"]["instrument"]
+        dev  = res_doc["metadata"]["device_name"]
+
+        # Ensure the dictionary keys are added
+        if dev not in self.query_dict.keys(): self.query_dict[dev] = []
+
+        # Add the matching data structures to the output dictionary
+        if (self.instrument_in_gridfs(inst)):
+            doc_struct = {}
+            try:
+                # Retrieve the file using GridOut
+                file_id = res_doc["_id"]
+                grid_out = self.db.gridfs.get(file_id)
+
+                # Create the corresponding data structure
+                doc_struct["_id"] = file_id
+                doc_struct["data"] = grid_out
+                doc_struct["metadata"] = res_doc["metadata"]
+                self.query_dict[dev].append(doc_struct)
+            except:
+                return 
+        else:
+            self.query_dict[dev].append(res_doc)
     
 
-    def create_dict(self, query_result: list) -> dict:
-        if (len(query_result) != 2):    
-            raise GaladrielDatabaseException("Length of result list incorrect")
+    def create_dict(self, query_result, fetch_related_data: bool) -> dict:
+        # Initialize the output dictionary
+        self.query_dict = {}
         
-        q_ind, query_dict = 0, {}
-        for cursor in query_result:
-            for doc in cursor:
-                dev = doc["metadata"]["device_name"]
+        # Loop through each document from each collection in the cursor
+        for doc in query_result:
+            if (fetch_related_data):
 
-                # Ensure the dictionary keys are added
-                if dev not in query_dict.keys(): query_dict[dev] = [] 
+                for name in self.dict_names:
+                    num_docs = len(doc[name]) # number of documents returned from the collection
+                    for i in range(num_docs): self.add_dict_value(doc[name][i])
             
-                # Add the matching data structures to the output dictionary
-                if (q_ind > 0): # gridFS
-                    doc_struct = {}
-                    try:
-                        # Retrieve the file using GridOut
-                        file_id = doc["_id"]
-                        grid_out = self.db.gridfs.get(file_id)
-                    
-                        # Create the corresponding data structure 
-                        doc_struct["_id"] = file_id
-                        doc_struct["data"] = grid_out
-                        doc_struct["metadata"] = doc["metadata"]
-                        query_dict[dev].append(doc_struct)
-                    except:
-                        continue
-
-                else: # acquisitions
-                    query_dict[dev].append(doc)
-            
-            q_ind += 1
-
-        return query_dict
+            else:
+                self.add_dict_value(doc)
+        
+        return self.query_dict
 
 
     ##################################################################################
@@ -259,6 +305,7 @@ class QueryAPI:
         return files[0]
 
     def get_in_time_range(self, date_a: str, date_b: str):
+        self.upload_time = "metadata.trigger_timestamp" # time parameter to query on
         date_a = datetime_parser.parse(date_a)
         date_b = datetime_parser.parse(date_b)
         cursor = self.db.gridfs.find({self.upload_time: {"$gte": date_a, "$lte": date_b}})
@@ -308,7 +355,7 @@ class QueryAPI:
         # save image 
         image.save(image_name)
 
-        #save corresponding metadata
+        # save corresponding metadata
         with open(metadata_name, 'w') as data: data.write(str(metadata))
 
     def normalize_image(self, image):
