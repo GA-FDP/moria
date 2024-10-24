@@ -538,9 +538,6 @@ class QueryAPI:
         # TODO: consider putting image format in metadata:
         image = Image.open(image_stream, mode="r", formats=["TIFF"])
         return image
-    
-    def read_image(self, gridfs_file):
-        return self.convert_gridfs_file_to_image(gridfs_file)
 
     def image_to_nparray(self, gridfs_file):
         """ Converts the image stored in the GridFS file into a numpy array.
