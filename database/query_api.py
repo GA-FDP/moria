@@ -23,6 +23,13 @@ class GaladrielDatabaseException(Exception):
 
 
 class QueryAPI:
+    """ Mongo database query API.
+
+    Parameters
+    ----------
+    db : Database instance
+        The client connection to the database.
+    """
     def __init__(self, db: Database):
         self.db = db
 
@@ -49,12 +56,27 @@ class QueryAPI:
     # CLEAR THE BUILT QUERY
     # --------------------------------------------------------------------------------
     def clear_query(self):
+        """ Removes the current query filters from the pipeline. """
         self.filter_pipeline.clear()
 
     # EXECUTE THE BUILT QUERY
     # --------------------------------------------------------------------------------
     # Run one single aggregation query that filters each collection and returns the output
     def run_query(self, fetch_related_data = False, make_dict = True):
+        """ Executes a MongoDB aggregate query utilizing the current requests in the filter
+            pipeline.
+        
+        Parameters
+        ----------
+        fetch_related_data : bool, default=False
+            If True, the query result will return all data associated with the shots that 
+            match the filters applied to each collection individually. If False, 
+            it will return only the data from documents with the requested filters.
+
+        make_dict : bool, default=True
+            If True, the function will construct a user friendly query from the 
+            resultant MongoDB cursor.
+        """
         key = 'metadata.shot_number'
         
         if (fetch_related_data):
@@ -111,6 +133,21 @@ class QueryAPI:
     # BUILD THE QUERY PIPELINE [ Filters the database ]
     # --------------------------------------------------------------------------------
     def query_data_range(self, query_dict: dict):
+        """ General range value multifield query.
+
+        This function parses the input dictionary and adds each filter criteria to the ongoing 
+        filter pipeline. Is capable of handling numerical and time ranges.
+
+        Parameters
+        ----------
+        query_dict : dict
+
+        Example:
+            range_query_dict = {
+                                'metadata' : {'shot_number' : [<lower bound>, <upper bound>]},
+                                'data' : {'data_field' : [<lower_bound>, <upper_bound>}
+                               }
+        """
         match_input = {"$match" : {"$and" : []}}
         
         # Create the query filter from the query dictionary 
@@ -157,6 +194,25 @@ class QueryAPI:
 
 
     def query_data_value(self, query_dict: dict):
+        """ General single value multifield query.
+
+        This function parses the input dictionary and adds each filter criteria to the ongoing 
+        filter pipeline.
+
+        Parameters
+        ----------
+        query_dict : dict
+
+        Example:
+            value_query_dict = {
+                                'metadata' : { 'experiment' : [<value 1>, <value 2>, ...],
+                                               'diagnostic' : [<value 1>, <value 2>, ...],
+                                               'instrument' : [<value 1>, <value 2>, ...],
+                                               'other_data' : [<value 1>, <value 2>, ...]
+                                             },
+                                'data' : {'data_field' : [<data_value1>, <data_value2>]}
+                               }
+        """
         match_input = {"$match" : {"$and" : [ {"$or" : []} ]}}
 
         # Create the query filter from the query dictionary 
@@ -185,6 +241,13 @@ class QueryAPI:
     # CREATE USER FRIENDLY DICTIONARY 
     # --------------------------------------------------------------------------------
     def add_dict_value(self, res_doc: dict):
+        """ Adds an individual document to the correct device subdictionary.
+
+        Parameters
+        ----------
+        res_doc : dict
+            A single document corresponding to one device for a single shot.
+        """
         inst = res_doc["metadata"]["instrument"]
         dev  = res_doc["metadata"]["device_name"]
 
@@ -211,6 +274,22 @@ class QueryAPI:
     
 
     def create_dict(self, query_result, fetch_related_data: bool) -> dict:
+        """ Creates a user friendly dictionary containing the results from the query.
+        
+        Parameters
+        ----------
+        query_result : MongoDB cursor object 
+            Result of self.run_query. 
+
+        fetch_related_data : bool
+            If True, the query result is in a different format.
+
+        Returns 
+        -------
+        self.query_dict : dict
+            Contains a user friendly dictionary with subdictionaries corresponding
+            to each device.
+        """
         # Initialize the output dictionary
         self.query_dict = {}
         
@@ -232,20 +311,55 @@ class QueryAPI:
     ###                         Direct MongoDB queries                             ###
     ##################################################################################
     def get_last_shot_number(self):
+        """ Retrieves the last_shot number from the run_setup collection. """
         return self.db.database["run_setup"].distinct("last_shot")[0]
 
     def get_experiment(self):
+        """ Retrieves the name current experiment name from the run_setup collection. """
         return self.db.database["run_setup"].distinct("experiment")[0]
 
     def diagnostic_exists(self, diagnostic: str):
+        """ Checks if a diagnostic exists in the diagnostics collection. 
+        
+        Parameters
+        ----------
+        diagnostic : str 
+
+        Returns 
+        -------
+        num_docs : int [ 0 or 1 ]
+            0 - if it is not found | 1 - if it is found
+        """
         num_docs = self.db.database["diagnostics"].count_documents({"diagnostic": diagnostic})
         return num_docs == 1
 
     def instrument_exists(self, instrument: str):
+        """ Checks if an instrument exists in the instruments collection. 
+        
+        Parameters
+        ----------
+        instrument : str 
+
+        Returns 
+        -------
+        num_docs : int [ 0 or 1 ]
+            0 - if it is not found | 1 - if it is found
+        """
         num_docs = self.db.database["instruments"].count_documents({"instrument": instrument})
         return num_docs == 1
 
     def instrument_in_gridfs(self, instrument: str):
+        """ Checks if an instrument is set to archive using GridFS. 
+        
+        Parameters
+        ----------
+        instrument : str 
+
+        Returns 
+        -------
+        grid_fs : bool
+            The archive status that was set when the instrument was added.
+        """
         if not self.instrument_exists(instrument): 
             print("\nInstrument doesn't exist\n")
             return
@@ -254,20 +368,36 @@ class QueryAPI:
         instrument_info = cursor.next()
         return instrument_info["gridfs"]
 
-    def hardware_info(self, dev_type: str, print_list = False):
-        if (dev_type != "instruments") and (dev_type != "diagnostics"):
+    def hardware_info(self, collection: str, print_list = False):
+        """ Ouptuts information regarding what instruments/diagnostics are already
+            contained within their respective collections.
+
+        Parameters
+        ----------
+        collection : str [ 'instruments' or 'diagnostics' ]
+            The name of the collection.
+
+        print_list : bool
+            If True, prints the results in a readable foramt.
+
+        Returns
+        -------
+        dev_list : list
+            Complete list of the labels in the requested collection.
+        """
+        if (collection != "instruments") and (collection != "diagnostics"):
             print("Not a valid input [instruments/diagnostics]")
             return
         
         dev_list = []
-        dev_cursor = self.db.database[dev_type].find()
-        num_dev = self.db.database[dev_type].count_documents({})
+        dev_cursor = self.db.database[collection].find()
+        num_dev = self.db.database[collection].count_documents({})
 
         if (print_list): print(f"\n{dev_type} currently in the database")
         if (print_list): print("---------------------------------")
         for i in range(num_dev):
             dev = dev_cursor.next()
-            dev_val = dev[dev_type[:-1]]
+            dev_val = dev[collection[:-1]]
             if (print_list): print(f' - {dev_val}')
             dev_list.append(dev_val)
         if (print_list): print("---------------------------------\n")
@@ -275,6 +405,20 @@ class QueryAPI:
         return dev_list
 
     def get_device_fields(self, device_name: str):
+        """ Retrieves the devices metadata fields corresponding to the most recently 
+            stored document.
+
+        Parameters
+        ----------
+        device_name : str
+            The name of the specific device. Corresponds to the field 'device_name'
+            in the metadata part of the document.
+
+        Returns
+        -------
+        field_list : list
+            Complete list of the metadata tags.
+        """
         data_dict = 'metadata'
         filter_crit = {f'{data_dict}.device_name': device_name}
         sort_crit   = [(f'{data_dict}.shot_number', -1)]     # Most recent document
@@ -295,16 +439,58 @@ class QueryAPI:
     ###                         Direct GridFS queries                              ###
     ##################################################################################
     def get_by_metadata(self, key: str, value: any):
+        """ Retrieves the GridFS files matching the metadata key, value pair.
+
+        Parameters
+        ----------
+        key : str
+            Metadata tag (field).
+        
+        key : any
+            Value requested.
+
+        Returns
+        -------
+        gridfs_files : list
+            Contains the gridfs files that match the query.
+        """
         cursor = self.db.gridfs.find(filter={"metadata." + key: value})
         files = [f.read() for f in cursor]
         return files
 
     def get_by_filename(self, filename: str):
+        """ Retrieves the GridFS files matching the filename field in metadata.
+
+        Parameters
+        ----------
+        filename : str
+
+        Returns
+        -------
+        gridfs_file : GridOut file object
+            GridFS GridOut object corresponding to the filename.
+            Example: <gridfs.grid_file.GridOut object at 0x14776e00df10>
+        """
         cursor = self.db.gridfs.find(filter={"filename": filename})
         files = [f.read() for f in cursor]
         return files[0]
 
     def get_in_time_range(self, date_a: str, date_b: str):
+        """ Retrieves the GridFS files that were aquired within a certain time frame.
+
+        Parameters
+        ----------
+        date_a : str
+            Beginning date/time in string format.
+        
+        date_b : str
+            Ending date/time in string format.
+
+        Returns
+        -------
+        gridfs_files : list
+            Contains the gridfs files that match the query.
+        """
         self.upload_time = "metadata.trigger_timestamp" # time parameter to query on
         date_a = datetime_parser.parse(date_a)
         date_b = datetime_parser.parse(date_b)
@@ -319,10 +505,32 @@ class QueryAPI:
     # gridfs_file = <gridfs.grid_file.GridOut object at 0x14776e00df10>
 
     def get_metadata_from_cursor(self, gridfs_file):
+        """ Retrieves the metadata associated with the GridFS file.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+
+        Returns
+        -------
+        metadata : dict
+            The metadata dictionary from fs.files associated with the GridFS file.
+        """
         metadata = gridfs_file.metadata
         return metadata
 
     def convert_gridfs_file_to_image(self, gridfs_file):
+        """ Retrieves the image from GridFS file.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+
+        Returns
+        -------
+        image : Image object
+            The image in TIFF format.
+        """
         gridfs_file.seek(0)
         image_bytes = gridfs_file.read()
         image_stream = io.BytesIO(image_bytes)
@@ -335,15 +543,52 @@ class QueryAPI:
         return self.convert_gridfs_file_to_image(gridfs_file)
 
     def image_to_nparray(self, gridfs_file):
+        """ Converts the image stored in the GridFS file into a numpy array.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+
+        Returns
+        -------
+        array : numpy array
+            Contains the image pixel values.
+        """
         image = self.convert_gridfs_file_to_image(gridfs_file)
         return np.array(image)
+    
+    def normalize_image(self, image):
+        """ Converts the 16-bit image to 8-bit so it can be shown using a viewer.
+
+        Parameters
+        ----------
+        image : Image object
+            The image in TIFF format.
+        
+        Returns
+        -------
+        The normalize image
+        """
+        return image.convert('RGB')
 
     def view_image(self, gridfs_file):
+        """ Coverts the gridfs file to an image and shows it.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+        """
         image = self.convert_gridfs_file_to_image(gridfs_file)
         norm_image = self.normalize_image(image)
         norm_image.show(title=gridfs_file.filename)
 
     def save_image_to_file(self, gridfs_file):
+        """ Saves an image and its associated metadata into a local directory.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+        """
         # get the data
         image = self.convert_gridfs_file_to_image(gridfs_file)
         metadata = self.get_metadata_from_cursor(gridfs_file)
@@ -357,7 +602,3 @@ class QueryAPI:
 
         # save corresponding metadata
         with open(metadata_name, 'w') as data: data.write(str(metadata))
-
-    def normalize_image(self, image):
-        # convert the 16-bit image to 8-bit so it can be shown using a viewer
-        return image.convert('RGB')
