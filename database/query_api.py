@@ -393,7 +393,7 @@ class QueryAPI:
         dev_cursor = self.db.database[collection].find()
         num_dev = self.db.database[collection].count_documents({})
 
-        if (print_list): print(f"\n{dev_type} currently in the database")
+        if (print_list): print(f"\n{collection} currently in the database")
         if (print_list): print("---------------------------------")
         for i in range(num_dev):
             dev = dev_cursor.next()
