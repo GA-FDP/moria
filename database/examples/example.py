@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 # system
+import os
+import pwd
 import sys
 from datetime import datetime
 from random import uniform
@@ -31,6 +33,7 @@ if (len(sys.argv) != 2):
     print(' 0: initial setup')
     print(' 1: storage examples')
     print(' 2: query examples')
+    print(' 3: update examples\n')
     exit()
 else:
     test_ind = int(sys.argv[1])
@@ -82,7 +85,8 @@ if (test_ind == 1):
                  'instrument':        '', 
                  'diagnostic':        '', # Diagnostic the device is tied to for this acquisition
                  'device_name':       '', # UNIQUE device identifier
-                 'data_info':         {}  # Describes the fields with data
+                 'data_info':         {}, # Describes the fields with data
+                 'notes':             []  # Contains individual document comments
                }
 
     # Below are a couple examples archiving different types of data. Usually different
@@ -173,10 +177,14 @@ if (test_ind == 2):
     # the documents that fit the criteria for each unique device_name. Otherwise
     # it returns a MongoDB cursor object that then needs to be parsed.
 
-    # NOTE: There are additional direct GridFS queries included in the API.
-    #       They are pretty limited and rather straightforward.
+    # NOTES: 
+    #   Range queries must be numeric list with a start and end. 
+    #   Value queries must be a list even if only one value is requested.
+    # 
+    #   There are additional direct GridFS queries included in the API.
+    #   They are pretty limited and rather straightforward.
+  
 
-   
     # Single value query returning the camera data with the associated values
     # for a single shot.
     # ------------------------------------------------------------------------
@@ -242,3 +250,93 @@ if (test_ind == 2):
         print(f'\n{device} documents')
         print('----------------------------------')
         for doc in device_list: print(doc)
+
+
+# ----------------------------------------------------------------------------
+# UPDATE EXAMPLES
+# ----------------------------------------------------------------------------
+if (test_ind == 3):
+    # Below are examples showing how to update/insert new information into previously
+    # archived data. The update dictionary is of the same structure as the filter
+    # dictionaries, EXCEPT the entry value is not required to be a list but 
+    
+    # NOTES: 
+    #   The update option CAN/WILL overwrite field data and is irreversible. So be very 
+    #   careful when choosing the filters for the update query. Try to make them 
+    #   as specific as possible or keep them to individual documents (shot number, device name)
+    #   to avoid overwritting vast quanities of documents.
+    #
+    #   There are three seperate commands:
+    #       replace: It will replace the value in the document with the value
+    #                in the document(s) update dictionary where the fields match.
+    #
+    #       insert:  It will add a new field, value pair to the document(s). If the 
+    #                field exists it will overwrite the current entry.
+    #
+    #       append:  It will append the value found in the update dictionary to
+    #                the document(s) dict/list value where the fields match.
+    #   
+    #   The update dictionary is of the same structure as the filter dictionaries, 
+    #   EXCEPT the entry value is NOT required to be a list, however it can be an int/float, 
+    #   an array of values, a dictionary or whatever else.
+    # 
+    #   Run each of these queries seperately. Uncomment the one you want to try out.
+
+
+    # Range query replacing the experiment name for the specific shots.
+    # As per the other examples we can submit more filters.
+    # Output: Should return "3 documents updated." | 1 camera docs and 2 acquisition docs
+    # ------------------------------------------------------------------------
+    value_filter_dict = {}
+    range_filter_dict = { 'metadata' : {'shot_number' : [3, 4]} }
+    update_dict = { 'metadata': {'experiment' : 'TEST_EXP2'} }
+
+    admin.update_doc(update_dict, value_filter_dict, range_filter_dict, command = 'replace')
+  
+
+    # Single value query to insert a new array measurment as a new data field 
+    # in a single document [shot number and device_name]
+    # Output: Should return "1 documents updated." | 1 acquisition doc
+    # ------------------------------------------------------------------------ 
+    value_filter_dict = { 'metadata' : { 'device_name' : ['gauge_1'],
+                                         'shot_number' : [5]
+                                       }
+                        }
+    range_filter_dict = {}
+    update_dict = { 'data': {'meas_array' : [1, 2, 3, 4, 5, 6]} }
+
+    # admin.update_doc(update_dict, value_filter_dict, range_filter_dict, command = 'insert')
+
+
+    # Single value query appending a dictionary to provide information about the 
+    # field added in the prior example.
+    # Output: Should return "1 documents updated."
+    # ------------------------------------------------------------------------ 
+    update_dict = { 'metadata' : { 'append_to' : 'dict', # list or dict
+                                   'data_info' : { 'meas_array' : {
+                                                      'data_type' : 'array[int]',
+                                                      'units' : 'seconds',
+                                                      'description' : 'example measurement array' }
+                                                 }
+                                 }
+                  }
+
+    # admin.update_doc(update_dict, value_filter_dict, range_filter_dict, command = 'append')
+
+
+    # Single value query appending a dictionary to a list containing a comment about 
+    # the previous updates.
+    # Output: Should return "1 documents updated."
+    # ------------------------------------------------------------------------ 
+    # admin.add_note_to_doc(4, 'gauge_1', 'test note describing some additional information') 
+    
+    # NOTE: same as running 
+    # update_dict = { 'metadata' : { 'append_to' : 'list',
+    #                                'notes' : { 'created_by' : pwd.getpwuid(os.getuid()).pw_name,
+    #                                            'date' : datetime.now(),
+    #                                            'content' : 'Added a description about the new field'
+    #                                          }
+    #                              }
+    #               }
+
+    # admin.update_doc(update_dict, value_filter_dict, range_filter_dict, command = 'append')
