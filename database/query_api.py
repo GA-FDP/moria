@@ -153,11 +153,16 @@ class QueryAPI:
         # Create the query filter from the query dictionary 
         for data_type, data_dict in query_dict.items():
             for field, query_list in data_dict.items():
+                
+                # Check if the filter entry is a list
+                if not isinstance(query_list, list):
+                    print(f'\nERROR in the range_query dict, field: {field} -- filter entry is not a list\n')
+                    continue
 
-                # Check if the list is empty
+                # Check if the list contains two elements
                 q_len = len(query_list)
-                if (q_len == 0): 
-                    print(f'\nERROR in {field}: query list is empty\n') 
+                if (q_len != 2):
+                    print(f'\nERROR in the range_query dict, field: {field} -- filter list is not length 2\n') 
                     continue
                     
                 # Return the requested bounds for the field
@@ -169,25 +174,28 @@ class QueryAPI:
                         lower_bound = datetime_parser.parse(lower_bound)
                         upper_bound = datetime_parser.parse(upper_bound)
                         if (lower_bound > upper_bound):
-                            print(f'\nERROR in {field}: {lower_bound} is after {upper_bound}\n') 
+                            print(f'\nERROR in the range_query dict, field {field}: {lower_bound} ' + \
+                                  f'is after {upper_bound}\n') 
                             continue
                     except ValueError:
-                        print(f'\nERROR in {field}: string bounds [{lower_bound}, {upper_bound}] ' + \
-                              f'are not parsable by datetime\n') 
+                        print(f'\nERROR in the range_query dict, field {field}: string bounds ' + \
+                              f'[{lower_bound}, {upper_bound}] are not parsable by datetime\n') 
                         continue
                 
                 #  numerical queries
                 elif (isinstance(lower_bound, (int, float)) and isinstance(upper_bound, (int, float))):
                     if (lower_bound > upper_bound):
-                        print(f'\nERROR in {field}: lower bound ({lower_bound}) > upper bound ({upper_bound})\n') 
+                        print(f'\nERROR in the range_query dict, field {field}: invalid range, ' + \
+                              f'lower_bound [{lower_bound}] > upper bound [{upper_bound}]\n') 
                         continue
 
                 else:
-                    print(f'\nERROR in {field}: the upper and lower bounds ' + \
+                    print(f'\nERROR in the range_query dict, field {field}: the upper and lower bounds ' + \
                           f'[{lower_bound}, {upper_bound}] are in incompatible formats\n')
                     continue
 
-                match_input["$match"]["$and"].append({f"{data_type}.{field}" : {"$gte" : lower_bound, "$lte" : upper_bound}})
+                match_input["$match"]["$and"].append({f"{data_type}.{field}" : {"$gte" : lower_bound, 
+                                                       "$lte" : upper_bound}})
 
         # Add to pipeline
         if (len(match_input["$match"]["$and"]) != 0): self.filter_pipeline.append(match_input)
@@ -218,10 +226,16 @@ class QueryAPI:
         # Create the query filter from the query dictionary 
         for data_type, data_dict in query_dict.items():
             for field, query_list in data_dict.items():
+                
+                # Check if the filter entry is a list
+                if not isinstance(query_list, list):
+                    print(f'\nERROR in the value_query dict, field: {field} -- filter entry is not a list\n')
+                    continue
+
                 # Check if the list is empty
                 q_len = len(query_list)
                 if (q_len == 0):
-                    print(f'\nERROR in {field}: query list is empty\n') 
+                    print(f'\nERROR in the value_query dict, field: {field} -- filter list is empty\n') 
                     continue
 
                 for q_ind in range(q_len):
