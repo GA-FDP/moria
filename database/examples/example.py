@@ -22,7 +22,7 @@ from database import Database, StorageAPI, QueryAPI, AdminAPI
 # Initializes the connection to the server containing the data. server_ip is 
 # set to None because I am assuming this is being called from the same server. 
 # If not replace with the IP address.
-db = Database(db_name = 'test_db', server_ip = None)
+db = Database(db_name = 'moria_test', server_ip = None)
 storage = StorageAPI(db)
 query   = QueryAPI(db)
 admin   = AdminAPI(db)
@@ -75,8 +75,9 @@ def image_to_bytes(image_path):
         return byte_arr.getvalue()
 
 if (test_ind == 1):
-    # Universal metadata REQUIRED for every device that stores data. Any number 
-    # of fields can be added to the dictionaries these are just required. 
+   
+    # Universal metadata REQUIRED for every device that stores data into the acquisitions collection. 
+    # Any number of fields can be added to the dictionaries these are just required. 
     data = {}
     metadata = { 'shot_number':       '', # UNIQUE shot (pulse) indicator
                  'experiment': query.get_experiment(), 
@@ -88,7 +89,7 @@ if (test_ind == 1):
                  'data_info':         {}, # Describes the fields with data
                  'notes':             []  # Contains individual document comments
                }
-
+    
     # Below are a couple examples archiving different types of data. Usually different
     # device data would be archived within different control codes simultaneously for the 
     # same laser pulse (shot), here I am archiving two devices in serial for the same 
@@ -97,7 +98,6 @@ if (test_ind == 1):
     # Example archiving a gauge for a range of shots
     # Device 1 -- gauge_1
     gauge1_data, gauge1_metadata = deepcopy(data), deepcopy(metadata)
-
     for shot in range(1, 6):
         # Simulated gauge measurements
         gauge1_data['meas1'] = shot * .37
@@ -119,7 +119,6 @@ if (test_ind == 1):
                                                    }
                                        }
         # Archive step
-        gauge1_metadata['archive_timestamp'] = datetime.now()
         data_struct = {'data': gauge1_data, 'metadata': gauge1_metadata}
         try:
             storage.insert_data(data_struct)
@@ -153,12 +152,77 @@ if (test_ind == 1):
                                                     }
                                         }
         # Archive step
-        basler1_metadata['archive_timestamp'] = datetime.now()
         data_struct = {'data': basler1_data, 'metadata': basler1_metadata}
         try:
             storage.insert_data(data_struct)
         except Exception as e:
             print(e)
+
+    # -----------------------------------------------------------------------------------------
+
+    # Universal metadata REQUIRED for every device that stores data intermediate analysis 
+    # into the processed_data collection. Any number of fields can be added to the dictionaries 
+    # these are just required. 
+    p_data = {}
+    p_metadata = { 'shot_number':       '', # UNIQUE shot (pulse) indicator
+                   'experiment': query.get_experiment(), 
+                   'archive_timestamp': '', # Time when the data is archived
+                   'data_info':         {}, # Describes the fields with data
+                   'notes':             []  # Contains individual document comments
+               }
+
+    # Example archiving analyzed diagnostic data from a shot # TODO
+    # Diagnostic 1 -- diag_1
+    diag1_data, diag1_metadata = deepcopy(p_data), deepcopy(p_metadata)
+    exp_meas = []
+    for shot in range(1, 6): 
+        # Simulated diagnsotic analysis
+        diag1_data['diag_analysis1'] = shot * uniform(0, 1)
+        diag1_data['diag_analysis2'] = (shot - 1) * uniform(0, 1) 
+        exp_meas.append(diag1_data['diag_analysis1']) 
+        
+        # Analysis metadata
+        diag1_metadata['shot_number'] = shot
+        diag1_metadata['diagnostic'] = 'SAMPLE_OUTPUT' # REQUIRED & must exist in the diagnostics collection
+        diag1_metadata['data_info'] = { 'meas1' : { 'data_type' : 'float',
+                                                     'units' : 'seconds',
+                                                     'description' : 'example measurement 1'
+                                                 },
+                                        'meas2' : { 'data_type' : 'float',
+                                                     'units' : 'Coulombs',
+                                                     'description' : 'example measurement 2'
+                                                   }
+                                       }
+        # Archive step
+        data_struct = {'data': diag1_data, 'metadata': diag1_metadata}
+        try:
+            storage.insert_data(data_struct, True) # processed data flag
+        except Exception as e:
+            print(e)
+
+        
+        if (shot == 4):
+            # Example archiving intermediate experiment data that occured during the experiment 
+            # over a batch of shots # TODO
+            # Experimental analysis 1 -- proc_1
+            proc1_data, proc1_metadata = deepcopy(p_data), deepcopy(p_metadata)
+            proc1_data['exp_raw_data1'] = exp_meas
+            proc1_data['exp_analysis1'] = sum(exp_meas) / len(exp_meas) # calculate average over shot range
+
+            # Analysis metadata
+            proc1_metadata['shot_number'] = shot
+            proc1_metadata['shot_range'] = [1, shot]
+            proc1_metadata['process'] = 'experimental_average' # REQUIRED 
+            proc1_metadata['data_info'] = { 'analysis1' : { 'data_type' : 'float',
+                                                    'units' : 'seconds',
+                                                    'description' : 'average over shot range'
+                                                  }}
+            # Archive step
+            data_struct = {'data': proc1_data, 'metadata': proc1_metadata}
+            try:
+                storage.insert_data(data_struct, True) # processed data flag
+            except Exception as e:
+                print(e)
 
 
 # ----------------------------------------------------------------------------
@@ -195,11 +259,13 @@ if (test_ind == 2):
                        }
     # Run query
     query.query_data_value(value_query_dict)
-    res = query.run_query(fetch_related_data = False, make_dict = True)
+    raw_res, proc_res = query.run_query(fetch_related_data = False, make_dict = True)
 
     # View image 
-    print(res[device_name][0]['metadata'])  # document metadata
-    mongo_img = res[device_name][0]['data'] # actual file in MongoDB format 
+    print(f'\nEXAMPLE 1: image document')
+    print('----------------------------------')
+    print(raw_res[device_name][0]['metadata'])  # document metadata
+    mongo_img = raw_res[device_name][0]['data'] # actual file in MongoDB format 
     query.view_image(mongo_img)
    
     # Clear the query pipeline
@@ -216,16 +282,24 @@ if (test_ind == 2):
 
     # Run query 
     query.query_data_range(range_query_dict)
-    res = query.run_query(fetch_related_data = True, make_dict = True)
+    raw_res, proc_res = query.run_query(fetch_related_data = True, make_dict = True)
 
     # Print the resultant dictionary
     # Output: Should be the gauge_1 and basler_1 documents corresponding to shots 2 & 3 
-    for device in res:
-        device_list = res[device]
+    for device in raw_res:
+        device_list = raw_res[device]
 
-        print(f'\n{device} documents')
+        print(f'\nEXAMPLE 2: {device} documents')
         print('----------------------------------')
         for doc in device_list: print(doc)
+    
+    # Print the processed data dictionary
+    for diag in proc_res:
+        diag_list = proc_res[diag]
+
+        print(f'\nEXAMPLE 2: {diag} analysis')
+        print('----------------------------------')
+        for doc in diag_list: print(doc)
 
     # Clear the query pipeline
     query.clear_query()
@@ -240,14 +314,14 @@ if (test_ind == 2):
     # Run query 
     query.query_data_value(value_query_dict)
     query.query_data_range(range_query_dict)
-    res = query.run_query(fetch_related_data = False, make_dict = True)
+    raw_res, proc_res = query.run_query(fetch_related_data = False, make_dict = True)
 
     # Print the resultant dictionary
     # Output: Should be the basler_1 documents corresponding to shots 3 & 4 
-    for device in res:
-        device_list = res[device]
+    for device in raw_res:
+        device_list = raw_res[device]
 
-        print(f'\n{device} documents')
+        print(f'\nEXAMPLE 3: {device} documents')
         print('----------------------------------')
         for doc in device_list: print(doc)
 
