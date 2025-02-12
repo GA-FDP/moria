@@ -18,7 +18,7 @@ fi
 
 # Define variables
 DB_NAME="$1"
-COLLECTIONS=("acquisitions" "diagnostics" "fs.chunks" "fs.files" "instruments" "run_setup")
+COLLECTIONS=("acquisitions" "diagnostics" "fs.chunks" "fs.files" "instruments" "run_setup" "processed_data")
 
 # Function to create collections
 create_collections() {
