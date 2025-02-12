@@ -40,8 +40,8 @@ class QueryAPI:
         self.filter_pipeline = []
 
         # Collections containing data
-        self.collections = ['acquisitions', 'fs.files', 'processed_data']
-        self.dict_names  = ['acq', 'gridfs', 'proc'] # used in aggregation queries
+        self.collections = ['acquisitions', 'fs.files']
+        self.dict_names  = ['acq', 'gridfs']            # used in aggregation queries
 
         # Useful global values
         self.num_collections = len(self.collections)
@@ -262,47 +262,29 @@ class QueryAPI:
         res_doc : dict
             A single document corresponding to one device for a single shot.
         """
-        
-        # Processed data
-        # ------------------------------------------------------------------
-        if 'instrument' not in res_doc["metadata"]:
-            # Diagnostic data
-            if 'diagnostic' in res_doc["metadata"]:
-                key = res_doc["metadata"]["diagnostic"]
+        inst = res_doc["metadata"]["instrument"]
+        dev  = res_doc["metadata"]["device_name"]
 
-            # Experiment / optimization info
-            elif 'process' in res_doc["metadata"]:
-                key = res_doc["metadata"]["process"]
-            
-            if key not in self.query_dict_proc.keys(): self.query_dict_proc[key] = []
-            self.query_dict_proc[key].append(res_doc)
+        # Ensure the dictionary keys are added
+        if dev not in self.query_dict.keys(): self.query_dict[dev] = []
 
-        # Raw acquisition data
-        # ------------------------------------------------------------------
+        # Add the matching data structures to the output dictionary
+        if (self.instrument_in_gridfs(inst)):
+            doc_struct = {}
+            try:
+                # Retrieve the file using GridOut
+                file_id = res_doc["_id"]
+                grid_out = self.db.gridfs.get(file_id)
+
+                # Create the corresponding data structure
+                doc_struct["_id"] = file_id
+                doc_struct["data"] = grid_out
+                doc_struct["metadata"] = res_doc["metadata"]
+                self.query_dict[dev].append(doc_struct)
+            except:
+                return 
         else:
-            inst = res_doc["metadata"]["instrument"]
-            dev  = res_doc["metadata"]["device_name"]
-
-            # Ensure the dictionary keys are added
-            if dev not in self.query_dict_raw.keys(): self.query_dict_raw[dev] = []
-
-            # Add the matching data structures to the output dictionary
-            if (self.instrument_in_gridfs(inst)):
-                doc_struct = {}
-                try:
-                    # Retrieve the file using GridOut
-                    file_id = res_doc["_id"]
-                    grid_out = self.db.gridfs.get(file_id)
-
-                    # Create the corresponding data structure
-                    doc_struct["_id"] = file_id
-                    doc_struct["data"] = grid_out
-                    doc_struct["metadata"] = res_doc["metadata"]
-                    self.query_dict_raw[dev].append(doc_struct)
-                except:
-                    return 
-            else:
-                self.query_dict_raw[dev].append(res_doc)
+            self.query_dict[dev].append(res_doc)
     
 
     def create_dict(self, query_result, fetch_related_data: bool) -> dict:
@@ -318,16 +300,12 @@ class QueryAPI:
 
         Returns 
         -------
-        self.query_dict_raw : dict
+        self.query_dict : dict
             Contains a user friendly dictionary with subdictionaries corresponding
-            to the raw data for each device.
-        
-        self.query_dict_proc : dict
-            Contains a user friendly dictionary with subdictionaries corresponding
-            to various processed data.
+            to each device.
         """
         # Initialize the output dictionary
-        self.query_dict_raw, self.query_dict_proc = {}, {}
+        self.query_dict = {}
         
         # Loop through each document from each collection in the cursor
         for doc in query_result:
@@ -340,7 +318,7 @@ class QueryAPI:
             else:
                 self.add_dict_value(doc)
         
-        return self.query_dict_raw, self.query_dict_proc
+        return self.query_dict
 
 
     ##################################################################################
