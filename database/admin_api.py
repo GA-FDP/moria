@@ -4,7 +4,7 @@ This module contains the AdminAPI class for database administration tasks.
 
 # System imports
 import os
-import pwd
+import getpass
 from datetime import datetime
 
 from .database  import Database
@@ -271,7 +271,7 @@ class AdminAPI:
         """
         value_filter_dict = { 'metadata' : {'shot_number' : [shot_number]} }
         update_dict = { 'metadata' : { 'append_to' : 'list',
-                                       'notes' : { 'created_by' : pwd.getpwuid(os.getuid()).pw_name, 
+                                       'notes' : { 'created_by' : getpass.getuser(), 
                                                    'date' : datetime.now(),
                                                    'content' : msg
                                                  }
