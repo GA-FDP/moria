@@ -119,7 +119,7 @@ class QueryAPI:
             print(f'\nFilter pipeline:\n{self.filter_pipeline}')
             print(f'\nUnion pipeline:\n{union_pipeline}\n')
 
-        # Run the aggregation query 
+        # Run the aggregation query
         res_cursor = self.db.database[self.data_collection].aggregate(union_pipeline)
 
         # Return the results
@@ -237,10 +237,10 @@ class QueryAPI:
                 if (q_len == 0):
                     print(f'\nERROR in the value_query dict, field: {field} -- filter list is empty\n') 
                     continue
-
+                
                 for q_ind in range(q_len):
                     # Allow for OR arguments on some select fields
-                    if (field in ["experiment", "diagnostic", "instrument", "device_name"]) and (q_len > 1):
+                    if (field in ["experiment", "diagnostic", "instrument", "device_name", "process"]) and (q_len > 1):
                         match_input["$match"]["$and"][0]["$or"].append({f"{data_type}.{field}" : query_list[q_ind]})
                     else:
                         match_input["$match"]["$and"].append({f"{data_type}.{field}" : query_list[q_ind]})
