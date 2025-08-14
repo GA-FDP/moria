@@ -254,6 +254,7 @@ class AdminAPI:
                 update_cnt += update_res.modified_count
 
         print(f'\n{update_cnt} document(s) updated.\n')
+        self.query.clear_query()
    
 
     def add_note_to_doc(self, shot_number: int, device_name: str, msg: str):
