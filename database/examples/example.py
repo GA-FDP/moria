@@ -22,7 +22,7 @@ from database import Database, StorageAPI, QueryAPI, AdminAPI
 # Initializes the connection to the server containing the data. server_ip is 
 # set to None because I am assuming this is being called from the same server. 
 # If not replace with the IP address.
-db = Database(db_name = 'moria_test', server_ip = None)
+db = Database(db_name = 'moria_test', server_ip = None, user_type = 'read_write')
 storage = StorageAPI(db)
 query   = QueryAPI(db)
 admin   = AdminAPI(db)
