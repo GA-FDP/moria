@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Check if the correct number of arguments are provided
 if [ "$#" -ne 1 ]; then
   echo
@@ -16,19 +15,37 @@ if ! pgrep mongod > /dev/null; then
   exit 1
 fi
 
+# Validate auth env vars — must have both or neither
+if [ -n "$MONGO_ADMIN_USER" ] && [ -z "$MONGO_ADMIN_PASS" ]; then
+  echo "Error: MONGO_ADMIN_USER is set but MONGO_ADMIN_PASS is not."
+  exit 1
+fi
+if [ -z "$MONGO_ADMIN_USER" ] && [ -n "$MONGO_ADMIN_PASS" ]; then
+  echo "Error: MONGO_ADMIN_PASS is set but MONGO_ADMIN_USER is not."
+  exit 1
+fi
+
 # Define variables
 DB_NAME="$1"
 COLLECTIONS=("acquisitions" "diagnostics" "fs.chunks" "fs.files" "instruments" "run_setup" "processed_data")
+
+AUTH_ARGS=()
+if [ -n "$MONGO_ADMIN_USER" ] && [ -n "$MONGO_ADMIN_PASS" ]; then
+  AUTH_ARGS=(
+    -u "$MONGO_ADMIN_USER"
+    -p "$MONGO_ADMIN_PASS"
+    --authenticationDatabase admin
+  )
+fi
 
 # Function to create collections
 create_collections() {
   local db_name=$1
   shift
   local collections=("$@")
-
   for collection in "${collections[@]}"; do
     echo "Creating collection: $collection in database: $db_name"
-    mongosh --eval "db.createCollection('$collection')" $db_name
+    mongosh "${AUTH_ARGS[@]}" --eval "db.createCollection('$collection')" $db_name
   done
 }
 
@@ -39,28 +56,26 @@ add_document() {
   local db_name=$1
   local collection=$2
   local fields=$3
-
   echo "Adding document to collection: $collection in database: $db_name"
-  mongosh --eval "db.$collection.insertOne($fields)" $db_name
+  mongosh "${AUTH_ARGS[@]}" --eval "db.$collection.insertOne($fields)" $db_name
 }
 
-# Function to create the unique compound index for each collection that will contain information
+# Function to create the unique compound index
 create_index() {
   local db_name=$1
   local collection="$2"
   local field1='metadata.shot_number'
   local field2='metadata.device_name'
   local index_name="MoriaIndex__shotNumber_deviceName"
-  
   echo "Adding index to collection: $collection in database: $db_name"
-  mongosh --eval "db.$collection.createIndex( { '$field1': 1, '$field2': 1 }, { unique: true, name : '$index_name' } )" $db_name
+  mongosh "${AUTH_ARGS[@]}" --eval "db.$collection.createIndex( { '$field1': 1, '$field2': 1 }, { unique: true, name : '$index_name' } )" $db_name
 }
 
 # Create the database and collections
 echo "Creating database: $DB_NAME and collections: ${COLLECTIONS[*]}"
 create_collections $DB_NAME "${COLLECTIONS[@]}"
 
-# Setup a unique compound index for the acquistion and fs.files collections
+# Setup a unique compound index for the acquisitions and fs.files collections
 echo "Create the compound indices"
 create_index $DB_NAME "acquisitions"
 create_index $DB_NAME "fs.files"

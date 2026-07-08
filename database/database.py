@@ -42,11 +42,15 @@ class Database:
             username = os.getenv("MONGO_READONLY_USER")
             password = os.getenv("MONGO_READONLY_PASS")
 
-        authentication_db = 'admin'
-        uri = (
-            f"mongodb://{username}:{password}@{server_ip}:27017/"
-            f"{db_name}?authSource={authentication_db}"
-        )
+        # Build URI — with or without auth
+        if username and password:
+            authentication_db = 'admin'
+            uri = (
+                f"mongodb://{username}:{password}@{server_ip}:27017/"
+                f"{db_name}?authSource={authentication_db}"
+            )
+        else:
+            uri = f"mongodb://{server_ip}:27017/{db_name}"
         
         # Connect to the database
         self.mongo_client = MongoClient(uri)

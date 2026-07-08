@@ -11,13 +11,9 @@ cleanup_old_backups() {
     rm -rf "${OLDEST_BACKUP}"
   fi
 }
-
-
-
 # --------------------------------------------------------------------
 # MAIN Script
 # --------------------------------------------------------------------
-
 # Check if the correct number of arguments are provided
 if [ "$#" -ne 2 ]; then
   echo
@@ -25,7 +21,6 @@ if [ "$#" -ne 2 ]; then
   echo
   exit 1
 fi
-
 # Check if mongod service is running
 if ! pgrep mongod > /dev/null; then
   echo
@@ -33,20 +28,54 @@ if ! pgrep mongod > /dev/null; then
   echo
   exit 1
 fi
-
 # Variables
 DB_NAME="$1"
 OUTPUT_DIR="$2"
 LOG_FILE="/data/mongo_data_backup/log"
 TIMESTAMP=$(date +"%F_%T")
 OUTPUT_PATH="${OUTPUT_DIR}/${DB_NAME}_${TIMESTAMP}"
-
+AUTH_ARGS=()
+if [ -n "$MONGO_ADMIN_USER" ] && [ -n "$MONGO_ADMIN_PASS" ]; then
+  AUTH_ARGS=(
+    -u "$MONGO_ADMIN_USER"
+    -p "$MONGO_ADMIN_PASS"
+    --authenticationDatabase admin
+  )
+fi
 # Create the output directory if it does not exist
 mkdir -p "${OUTPUT_DIR}"
 
-# Run mongodump and capture output and error
-DUMP_OUTPUT=$(mongodump --db "${DB_NAME}" --out "${OUTPUT_PATH}" 2>&1)
-DUMP_EXIT_STATUS=$?
+# Retry settings
+MAX_ATTEMPTS=3
+RETRY_DELAY_SECONDS=30
+
+# Run mongodump with retry logic and capture output and error
+DUMP_EXIT_STATUS=1
+for ATTEMPT in $(seq 1 "${MAX_ATTEMPTS}"); do
+  if [ "${ATTEMPT}" -gt 1 ]; then
+    echo "$TIMESTAMP - Retrying backup (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..." >> $LOG_FILE
+    # Clean up any partial output from the failed attempt before retrying
+    rm -rf "${OUTPUT_PATH}"
+  fi
+
+  DUMP_OUTPUT=$(mongodump \
+      "${AUTH_ARGS[@]}" \
+      --db "${DB_NAME}" \
+      --out "${OUTPUT_PATH}")
+  # --numParallelCollections=1 \
+  # --readPreference=secondaryPreferred)
+  DUMP_EXIT_STATUS=$?
+
+  if [ ${DUMP_EXIT_STATUS} -eq 0 ]; then
+    break
+  fi
+
+  echo "$TIMESTAMP - Backup attempt ${ATTEMPT}/${MAX_ATTEMPTS} failed" >> $LOG_FILE
+
+  if [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; then
+    sleep "${RETRY_DELAY_SECONDS}"
+  fi
+done
 
 # Check if mongodump was successful
 if [ ${DUMP_EXIT_STATUS} -eq 0 ]; then
@@ -54,6 +83,7 @@ if [ ${DUMP_EXIT_STATUS} -eq 0 ]; then
   # Remove oldest backup
   cleanup_old_backups
 else
-  echo "$TIMESTAMP - Backup failed" >> $LOG_FILE
+  echo "$TIMESTAMP - Backup failed after ${MAX_ATTEMPTS} attempts" >> $LOG_FILE
+  rm -rf $OUTPUT_PATH
   exit 1
 fi
