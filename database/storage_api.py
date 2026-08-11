@@ -3,6 +3,7 @@ This module contains the StorageAPI class for storing data in the database.
 """
 
 # system
+import pickle
 from datetime import datetime
 
 # MORIA
@@ -29,7 +30,7 @@ class StorageAPI:
     # -----------------------------------------------------------------------------------
     # Generalized archive utility using the storage API [single document]
     # -----------------------------------------------------------------------------------
-    def insert_data(self, data_struct: dict, processed_data = False):
+    def insert_data(self, data_struct: dict, processed_data = False, store_in_gridfs = False):
         """ Archive a single document into the database.
 
         This function will dynamically determine where the data needs to be archived in based on 
@@ -44,6 +45,9 @@ class StorageAPI:
         processed_data : bool
             If this flag is enabled the data will be stored in the processed_data collection
             instead of the raw data acquisition or gridFS.
+
+        store_in_gridfs : bool
+            This is to override the instrument table and archive this document into gridFS.
 
         Structure
         ---------
@@ -193,7 +197,7 @@ class StorageAPI:
 
             # Check if device is marked to store data into gridFS
             # -------------------------------------------------------------
-            if (self.query.instrument_in_gridfs(inst)): 
+            if (self.query.instrument_in_gridfs(inst)): # Camera images 
                 data = data['buffer']
 
                 # Store the GridFS files
@@ -205,6 +209,15 @@ class StorageAPI:
                 else: # TODO: log
                     print(f'\nData stored in GridFS must be a bytes object\n')
         
+            elif (store_in_gridfs): # Other files
+                # Convert data dictionary to byte stream
+                data = pickle.dumps(data)
+
+                metadata['archive_timestamp'] = datetime.now()
+                self.db.gridfs.put(data,
+                                   filename = '',
+                                   metadata = metadata)
+
             else:
                 # Create a unique document key overriding the auto-generated one # TODO: construct our own unique ID
                 data_struct['_id'] = str(uuid.uuid4())

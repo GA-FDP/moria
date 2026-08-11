@@ -12,6 +12,7 @@ import time
 from dateutil import parser as datetime_parser
 
 # MORIA
+import pickle
 from .database import Database
 
 class GaladrielDatabaseException(Exception):
@@ -287,7 +288,7 @@ class QueryAPI:
             if dev not in self.query_dict_raw.keys(): self.query_dict_raw[dev] = []
 
             # Add the matching data structures to the output dictionary
-            if (self.instrument_in_gridfs(inst)):
+            if (self.instrument_in_gridfs(inst) or ('data' not in res_doc)):
                 doc_struct = {}
                 try:
                     # Retrieve the file using GridOut
@@ -539,6 +540,22 @@ class QueryAPI:
     ##################################################################################
 
     # gridfs_file = <gridfs.grid_file.GridOut object at 0x14776e00df10>
+
+    def read_data_from_gridfs(self, gridfs_file):
+        """Unpacks and returns non-image data stored as a pickled byte stream from GridFS.
+
+        Parameters
+        ----------
+        gridfs_file : GridOut file object
+
+        Returns
+        -------
+        data : 
+            The original data dictionary.
+        """
+        # Read the raw byte stream from GridFS and deserialize using pickle
+        bytes = gridfs_file.read()
+        return pickle.loads(bytes)
 
     def get_metadata_from_cursor(self, gridfs_file):
         """ Retrieves the metadata associated with the GridFS file.
