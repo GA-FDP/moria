@@ -1,0 +1,80 @@
+#!/bin/bash
+# Usage:
+#   ./create_database_from_subset /path/to/galadriel_dir [db_name]
+#
+# Authentication (optional):
+#   If MONGO_ADMIN_USER is set, the script authenticates against the admin DB.
+#   If it is not set, the script connects without authentication
+#   (for mongod instances running without --auth).
+#
+# Environment variables:
+#   MONGO_ADMIN_USER   admin username (enables auth when set)
+#   MONGO_ADMIN_PASS   admin password (prompted for if user is set but pass isn't)
+#   MONGO_URI          optional connection string (e.g. mongodb://host:27017)
+#   MONGO_HOST         optional host (ignored if MONGO_URI is set)
+#   MONGO_PORT         optional port (ignored if MONGO_URI is set)
+
+set -e
+
+DUMP_DIR="$1"
+DB_NAME="$2"
+
+if [ -z "$DUMP_DIR" ]; then
+    echo "Usage: $0 <dump_directory> [database_name]"
+    exit 1
+fi
+
+if [ ! -d "$DUMP_DIR" ]; then
+    echo "Error: dump directory not found at $DUMP_DIR"
+    exit 1
+fi
+
+# ---- Build connection / auth args ----
+CONN_ARGS=()
+
+if [ -n "$MONGO_URI" ]; then
+    CONN_ARGS+=(--uri="$MONGO_URI")
+else
+    [ -n "$MONGO_HOST" ] && CONN_ARGS+=(--host "$MONGO_HOST")
+    [ -n "$MONGO_PORT" ] && CONN_ARGS+=(--port "$MONGO_PORT")
+fi
+
+AUTH_ARGS=()
+
+if [ -n "$MONGO_ADMIN_USER" ]; then
+    if [ -z "$MONGO_ADMIN_PASS" ]; then
+        read -r -s -p "Password for MongoDB user '$MONGO_ADMIN_USER': " MONGO_ADMIN_PASS
+        echo
+    fi
+    AUTH_ARGS=(
+        -u "$MONGO_ADMIN_USER"
+        -p "$MONGO_ADMIN_PASS"
+        --authenticationDatabase admin
+    )
+    echo "Authentication: enabled (user: $MONGO_ADMIN_USER)"
+else
+    echo "Authentication: disabled (MONGO_ADMIN_USER not set)"
+fi
+
+echo "Restoring from: $DUMP_DIR"
+
+# Default: restore as-is with no rename
+if [ -z "$DB_NAME" ]; then
+    echo "No DB override provided, restoring as-is..."
+    mongorestore \
+        "${CONN_ARGS[@]}" \
+        "${AUTH_ARGS[@]}" \
+        --dir="$DUMP_DIR"
+    echo "Restore complete."
+    exit 0
+fi
+
+echo "Target DB override: $DB_NAME"
+mongorestore \
+    "${CONN_ARGS[@]}" \
+    "${AUTH_ARGS[@]}" \
+    --dir="$DUMP_DIR" \
+    --nsFrom="galadriel.*" \
+    --nsTo="${DB_NAME}.*"
+
+echo "Restore complete."

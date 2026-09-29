@@ -1,0 +1,181 @@
+#!/bin/bash
+# Usage:
+#   ./download_subset_database <output_directory> <shot_start> <shot_end>
+#
+# Authentication (optional):
+#   If MONGO_ADMIN_USER is set, the script authenticates against the admin DB.
+#   If not, it connects without authentication (mongod running without --auth).
+#
+# Environment variables:
+#   MONGO_ADMIN_USER   admin username (enables auth when set)
+#   MONGO_ADMIN_PASS   admin password (prompted for if user is set but pass isn't)
+#   MONGO_URI          optional connection string (e.g. mongodb://host:27017)
+#   MONGO_HOST         optional host (ignored if MONGO_URI is set)
+#   MONGO_PORT         optional port (ignored if MONGO_URI is set)
+#   BATCH_TMP          scratch dir for GridFS batches (default: /data/user_data/tmp)
+
+set -e
+set -o pipefail
+
+OUTDIR="$1"
+SHOT_START="$2"
+SHOT_END="$3"
+DB="galadriel"
+BUCKET="fs"
+BATCH_TMP="${BATCH_TMP:-/data/user_data/tmp}"
+
+if [ -z "$OUTDIR" ] || [ -z "$SHOT_START" ] || [ -z "$SHOT_END" ]; then
+    echo "Usage: $0 <output_directory> <shot_start> <shot_end>"
+    exit 1
+fi
+
+mkdir -p "$OUTDIR"
+
+# ---- Build connection / auth args ----
+# mongodump takes --uri; mongosh takes the URI as a positional argument.
+DUMP_CONN_ARGS=()
+SH_CONN_ARGS=()
+
+if [ -n "$MONGO_URI" ]; then
+    DUMP_CONN_ARGS+=(--uri="$MONGO_URI")
+    SH_CONN_ARGS+=("$MONGO_URI")
+else
+    if [ -n "$MONGO_HOST" ]; then
+        DUMP_CONN_ARGS+=(--host "$MONGO_HOST")
+        SH_CONN_ARGS+=(--host "$MONGO_HOST")
+    fi
+    if [ -n "$MONGO_PORT" ]; then
+        DUMP_CONN_ARGS+=(--port "$MONGO_PORT")
+        SH_CONN_ARGS+=(--port "$MONGO_PORT")
+    fi
+fi
+
+AUTH_ARGS=()
+
+if [ -n "$MONGO_ADMIN_USER" ]; then
+    if [ -z "$MONGO_ADMIN_PASS" ]; then
+        read -r -s -p "Password for MongoDB user '$MONGO_ADMIN_USER': " MONGO_ADMIN_PASS
+        echo
+    fi
+    AUTH_ARGS=(
+        -u "$MONGO_ADMIN_USER"
+        -p "$MONGO_ADMIN_PASS"
+        --authenticationDatabase admin
+    )
+    echo "Authentication: enabled (user: $MONGO_ADMIN_USER)"
+else
+    echo "Authentication: disabled (MONGO_ADMIN_USER not set)"
+fi
+
+QUERY="{\"metadata.shot_number\":{\"\$gte\":${SHOT_START},\"\$lte\":${SHOT_END}}}"
+
+############################################
+# 1. FULL COLLECTIONS
+############################################
+echo "Dumping full collections..."
+
+for COLL in diagnostics instruments; do
+    echo "  -> $COLL"
+
+    mongodump \
+        "${DUMP_CONN_ARGS[@]}" \
+        "${AUTH_ARGS[@]}" \
+        --db "$DB" \
+        --collection "$COLL" \
+        --out "$OUTDIR"
+done
+
+############################################
+# 2. NORMAL FILTERED COLLECTIONS
+############################################
+echo "Dumping shot-filtered collections..."
+
+for COLL in acquisitions processed_data; do
+    echo "  -> $COLL"
+
+    mongodump \
+        "${DUMP_CONN_ARGS[@]}" \
+        "${AUTH_ARGS[@]}" \
+        --db "$DB" \
+        --collection "$COLL" \
+        --query "$QUERY" \
+        --out "$OUTDIR"
+done
+
+############################################
+# 3. GRIDFS FILES (STREAMED)
+############################################
+echo "Dumping GridFS files..."
+
+FILES_BSON="$OUTDIR/$DB/${BUCKET}.files.bson"
+CHUNKS_BSON="$OUTDIR/$DB/${BUCKET}.chunks.bson"
+
+mkdir -p "$OUTDIR/$DB"
+
+# Start from empty files so re-runs don't append onto stale data
+: > "$FILES_BSON"
+: > "$CHUNKS_BSON"
+
+FIRST_BATCH=true
+
+mongosh "${SH_CONN_ARGS[@]}" "${AUTH_ARGS[@]}" --quiet --eval "
+const gdb = db.getSiblingDB('${DB}');
+const batchSize = 2000;
+const cursor = gdb['${BUCKET}.files'].find(
+    { 'metadata.shot_number': { \$gte: $SHOT_START, \$lte: $SHOT_END } },
+    { _id: 1 }
+);
+let batch = [];
+while (cursor.hasNext()) {
+    batch.push(cursor.next()._id);
+    if (batch.length === batchSize) {
+        print(JSON.stringify(batch.map(id => ({ \$oid: id.toHexString() }))));
+        batch = [];
+    }
+}
+if (batch.length > 0) {
+    print(JSON.stringify(batch.map(id => ({ \$oid: id.toHexString() }))));
+}
+" | while read -r line; do
+    [[ -z "$line" ]] && continue
+    echo "  -> dumping batch of files"
+
+    mongodump \
+        "${DUMP_CONN_ARGS[@]}" \
+        "${AUTH_ARGS[@]}" \
+        --db "$DB" \
+        --collection "${BUCKET}.files" \
+        --query "{\"_id\": {\"\$in\": $line}}" \
+        --out "$BATCH_TMP"
+    mongodump \
+        "${DUMP_CONN_ARGS[@]}" \
+        "${AUTH_ARGS[@]}" \
+        --db "$DB" \
+        --collection "${BUCKET}.chunks" \
+        --query "{\"files_id\": {\"\$in\": $line}}" \
+        --out "$BATCH_TMP"
+
+    # On first batch, copy metadata JSON files (only needed once)
+    if [ "$FIRST_BATCH" = true ]; then
+        cp "$BATCH_TMP/$DB/${BUCKET}.files.metadata.json"  "$OUTDIR/$DB/" 2>/dev/null || true
+        cp "$BATCH_TMP/$DB/${BUCKET}.chunks.metadata.json" "$OUTDIR/$DB/" 2>/dev/null || true
+        FIRST_BATCH=false
+    fi
+
+    # Append BSON — safe because BSON is a flat document stream
+    cat "$BATCH_TMP/$DB/${BUCKET}.files.bson"  >> "$FILES_BSON"
+    cat "$BATCH_TMP/$DB/${BUCKET}.chunks.bson" >> "$CHUNKS_BSON"
+
+    rm -rf "$BATCH_TMP"
+done
+
+echo
+echo "Dump complete."
+echo "Dump written to: $OUTDIR"
+echo
+echo "To restore, run:"
+if [ -n "$MONGO_ADMIN_USER" ]; then
+    echo "  mongorestore -u \$MONGO_ADMIN_USER -p \$MONGO_ADMIN_PASS --authenticationDatabase admin --dir=$OUTDIR"
+else
+    echo "  mongorestore --dir=$OUTDIR"
+fi
